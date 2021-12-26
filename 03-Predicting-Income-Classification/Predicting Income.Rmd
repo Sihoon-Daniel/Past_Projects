@@ -1,0 +1,152 @@
+---
+title: "810_Team_8"
+author: "Sihoon Yu (U65129043)"
+date: "10/13/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+#install.packages(c("data.table", "ggplot2", "ggthemes", "scales", "rpart", "randomForest",
+#                   "glmnet","gbm", "rpart.plot","fastDummies","tidyverse","scorecard","reshape2"))
+library(fastDummies)
+library(tidyverse)
+library(randomForest)
+library(scorecard)
+library(data.table)
+library(caret)
+library(glmnet)
+library(ggplot2)
+library(ggthemes)
+library(scales)
+library(rpart)
+library(rpart.plot)
+library(gbm)
+library(reshape2)
+
+
+#Reading the data and saving it to a variable named df
+df <- fread("adult_revised.csv",stringsAsFactors = TRUE)
+
+
+#Creating dummy variables, removing the first column and selected columns
+dd <- dummy_cols(df, select_columns = c('Employment', 'Education', 'Marital_status','Occupation', 'Relationship', 'Race', 'Sex'), 
+                      remove_first_dummy = TRUE, remove_selected_columns = TRUE)
+
+#Setting US as 1 and others as 0
+dd$US<-ifelse(dd$Country == 'United-States',1,0)
+dd$Country <- NULL
+
+#rearranges column order so that income is placed in the last row
+dd <- dd[,c(1,2,3,4,5,6,8:58,7)]
+names(dd) <- make.names(names(dd))
+
+#Creating train and test set and defining formula
+id <- createDataPartition(dd$Income, p = 0.8, list = FALSE)
+train<-dd[id, ]
+test<-dd[-id, ]
+formula <- as.formula(Income ~ .)
+
+train2 <- train
+test2 <- test
+test2$Income <- ifelse(test2$Income == "<=50K", 0, 1)
+train2$Income <- ifelse(train2$Income == "<=50K", 0, 1)
+y_train <- train2$Income
+y_test <- test2$Income
+
+head(train)
+
+#Exploring with the Data
+
+#Violin Graph of Income vs Work Hours
+ggplot(data=dd ,mapping=aes(y=Work_Hours,x=Income))+
+  geom_violin()
+
+#Bar Graph of US vs non-US citizens
+dd2 <- dd
+dd2$INUS<-ifelse(dd2$US == '1',1,0)
+dd2$NOTUS<-ifelse(dd2$US == '0',1,0)
+ggplot(data=dd2)+
+  geom_col(mapping=aes(y=INUS,x=Income),color="pink")+
+  geom_col(mapping=aes(y=NOTUS,x=Income),color="blue")+
+  ylab("In US Vs. Not in US") 
+
+#Pie Chart 1
+
+dd2$MFIVEK<-ifelse(dd2$Sex_Male=='1'&dd2$Income=='>50K',1,0)
+dd2$FFIVEK<-ifelse(dd2$Sex_Male=='0'&dd2$Income=='>50K',1,0)
+dd2$MFIVEK2<-ifelse(dd2$Sex_Male=='1'&dd2$Income=='<=50K',1,0)
+dd2$FFIVEK2<-ifelse(dd2$Sex_Male=='0'&dd2$Income=='<=50K',1,0)
+
+greater_50k <- c(sum(dd2$MFIVEK),sum(dd2$FFIVEK))
+piepercent <- round(100*greater_50k/sum(greater_50k), 1)
+labels <- c('Male > 50k','Female > 50k')
+print(pie(greater_50k, labels = piepercent, main = 'Male Vs. Female > 50k', col = rainbow(length(greater_50k))))
+
+#Pie Chart 2
+under_50k <- c(sum(dd2$MFIVEK2),sum(dd2$FFIVEK2))
+piepercent <- round(100*under_50k/sum(under_50k), 1)
+labels <- c('Male <= 50k','Female <= 50k')
+print(pie(under_50k, labels = piepercent, main = 'Male Vs. Female under 50k', col = rainbow(length(under_50k))))
+
+#Point Plot with Education on Age
+print(ggplot(dd, aes(x = Age, y = Years_of_education, color = Income))+geom_point(position = "jitter")+
+  labs(x = "Age", y = "Years of Education", color = "Income"))
+
+#Correlation Heatmap
+ddf <- dd
+ddf$Income <- NULL
+cormat <- round(cor(ddf),2)
+melted_cormat <- melt(cormat)
+print(ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)))
+
+
+#Classification Tree
+
+#making a decision tree
+dtm <- rpart(formula, train, method="class", control=rpart.control(cp=0.01,minsplit =0.01, minbucket = 5, maxdepth = 10 ))  
+print(rpart.plot(dtm))
+
+#adjustment in cp
+#Overfitting
+dtm_2 <- rpart(formula, train, method="class",control=rpart.control(cp=0,minsplit =0.01, minbucket = 5, maxdepth = 10 ))
+print(rpart.plot(dtm_2))
+
+#Underfitting
+dtm_3 <- rpart(formula, train, method="class",control=rpart.control(cp=0.1,minsplit =0.1, minbucket = 5, maxdepth = 10 ))
+print(rpart.plot(dtm_3))
+
+
+#predicting a result and printing MSE
+yhat4.tree <- predict(dtm, train2)
+print(mse.tree <- mean((yhat4.tree - y_train) ^ 2))
+
+
+#Initialize instance of random forest
+#Base Model
+randomForest(formula, data = train, do.trace=T, mtry=10, keep.inbag=TRUE)
+
+#Bagging Model, mtry = 57 because the last one is Income
+randomForest(formula, data = train2, do.trace=T, mtry=57, keep.inbag=TRUE)
+
+#Fitting the model and plotting the varImpPlot
+fit.rndfor <- randomForest(formula, data = train2, mtry=10, do.trace=T)
+print(varImpPlot(fit.rndfor))
+yhat.rndfor <- predict(fit.rndfor, test)
+mse.tree <- mean((yhat.rndfor - y_test) ^ 2)
+print(mse.tree)
+
+#Boosting Model
+fit.btree <- gbm(formula, data = train2,
+                 distribution = "gaussian",
+                 n.trees = 100,
+                 interaction.depth = 2,
+                 shrinkage = 0.001)
+relative.influence(fit.btree)
+yhat.btree <- predict(fit.btree, train, n.trees = 100)
+mse.btree <- mean((yhat.btree - y_train) ^ 2)
+print(mse.btree)
+
+
+
+```
