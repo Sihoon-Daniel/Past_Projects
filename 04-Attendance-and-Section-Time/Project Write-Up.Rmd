@@ -1,0 +1,303 @@
+---
+title: "Do afternoon sections lead to higher attendance?"
+author: "Aditya Sinha, Daniel Sihoon, Rochel Chan, Alexander von Schwerdtner"
+subtitle: "BA830 Group Project: Prof. Andrey Fradkin"
+date: "11/30/2021"
+output: pdf_document
+---
+
+# Abstract
+The aim of this experiment is to observe if there is any difference in class attendance depending on morning and afternoon cohorts. The operational hypothesis for this experiment is that the afternoon section will lead to higher attendance, meaning that the null hypothesis of this experiment is such that afternoon class time does not have any effect on attendance. The experiment implemented natural randomization of students in the MSBA program in the Fall of 2019 (10/30/2019 to 12/04/2019) to avoid non-interference assumption and analyze on individual and classroom cluster level. The result showed that the afternoon section had a higher attendance compared to the morning section, which implies that the null hypothesis in this experiment was whether the morning section has the same statistical effect on attendance as the afternoon section. In conclusion, this experiment suggests that in order to increase the in-person attendance for MSBA classes, we  recommend to the MSBA Faculty of Boston University Questrom School of Business, to prefer afternoon sections over morning sections when scheduling courses.
+
+# Introduction
+As more universities shift from online to in-person classes, exploring the effect of morning and afternoon classes can help institutions maximize student learning and find ways to build effective learners. Improving academic performance is a common goal for both academic institutions and students. The study *Effect of Attendance on the Performance of Day and Evening Students* presents a strong positive correlation between attendance and performance.[^1] Therefore, an effective way of improving one's performance is to increase attendance. Out of several factors that affect attendance, our experiment focuses on whether class times lead to behavioral change that impacts attendance. The intuition behind attending morning and afternoon cohorts can be affected by many factors, some of which directly affect a student's ability to attend class and absorb information. For example, studies conducted worldwide have shown that sleep deprivation is correlated with school absenteeism.[^2] With fluctuations in students' sleeping schedules, delaying class start time may lead to longer sleep cycles and a reduction in tardiness the following day. Thus, for some students, afternoon classes may be associated with a lower rate of school absence behavior. This could be the opposite for students who are natural morning learners or those who prefer to start their days early. Our experiment attempts to analyze whether afternoon classes have a higher attendance rate. We are adding the date variable to look into attendance.
+
+[^1]: Barrett. (2018). Effect of Attendance on the Performance of Day and Evening Students. ProQuest Dissertations Publishing.
+
+[^2]: Hysing, Haugland, S., Stormark, K. M., Boe, T., & Sivertsen, B. (2015). Sleep and school attendance in adolescence: Results from a large population-based study. Scandinavian Journal of Public Health, 43(1), 2--9. <https://doi.org/10.1177/1403494814556647>.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(curl)
+library(data.table)
+library(fixest)
+library(broom)
+library(lfe)
+library(pwr)
+library(dplyr)
+library(modelsummary)
+library(ggplot2)
+library(stringr)
+library(ggthemes)
+```
+
+## Pre-Registration to prevent P-Hacking
+
+To prevent P-Hacking we pre-registered the experiment with Prof. Andrey Fradkin before conducting the experiment. Additionally we calculated the power analysis and are expecting Cohen's D for 61% at a 5% significance-level and a power of 80%.
+```{r}
+# Power calculation
+pwr.t2n.test(n1=42, n2=43, d=NULL, sig.level=.05, power=.8)
+```
+
+```{r, include=FALSE}
+A_Morning <- 'https://raw.githubusercontent.com/aditya248/causal-inference-experiment/main/Fall19-A-Morning.csv'
+B_Afternoon <- 'https://raw.githubusercontent.com/aditya248/causal-inference-experiment/main/FALL19-B-Afternoon.csv'
+```
+
+```{r}
+# reading in the datasets
+data_morning <- fread(A_Morning)
+data_afternoon <- fread(B_Afternoon)
+data_morning$ID <- seq.int(nrow(data_morning))
+data_afternoon$ID <- seq.int(nrow(data_morning) + 1, nrow(data_morning) + 
+                               nrow(data_afternoon))
+DT_morning = copy(data_morning)
+DT_afternoon = copy(data_afternoon)
+```
+
+## Method
+
+### Participants
+
+The participants in the experiment are students from the 2019 MSBA morning and afternoon cohort for a particular class. The dataset was derived from Professor Tibert and has been pre-processed for privacy and confidentiality purposes. No further information is given other than attendance check-in times and the gender of the student. Upon analyzing the datasets we found that there is a equal amount of male and female students in the treatment and control group but we found that number of female students is higher overall.
+
+### Data Cleaning and Pre-Processing
+
+Prior to running our regressions, we added columns for the treatment group in both morning and afternoon sections. We then combined the datasets and renamed the total attendance column. To ensure that we can run the regression for our randomization check, we changed the values of the gender column from strings to numerical values with 1 indicating Males and '0' indicating Females.
+
+```{r}
+# adding treatment column
+data_afternoon[, treatment:= 1]
+data_morning[, treatment:= 0]
+
+# combining datasets
+dataset = rbind(data_morning[,.(Gender, `Total Awarded`, treatment)], 
+                data_afternoon[,.(Gender, `Total Awarded`, treatment)])
+
+# renaming the total attendance column
+dataset <- rename(dataset,total_attendance  = `Total Awarded`)
+
+# Encoding Gender as Male = 1 and Female = 0
+dataset[, gender_numerical:= ifelse(Gender == 'M', 1, 0)]
+```
+
+In order to run regressions on the given dates, we had to pre-process the data so that we could analyze the attendance of participants on specific dates. Therefore, we added a new column 'date' in both the morning and afternoon datasets. Finally we used 'rbind' to merge the two together into one 'date_dataset'.
+
+```{r}
+dates_morning = rep(c('12/4/2019', '12/2/2019',	'11/25/2019',	'11/20/2019',	
+                      '11/18/2019',	'11/13/2019',	'11/6/2019',	'11/4/2019',	
+                      '10/30/2019'),each=42)
+
+dates_afternoon = rep(c('12/4/2019', '12/2/2019',	'11/25/2019',	'11/20/2019',	
+                        '11/18/2019',	'11/13/2019',	'11/6/2019',	'11/4/2019',	
+                        '10/30/2019'),each=43)
+
+
+DT_morning[,`Total Awarded`:=NULL]
+DT_afternoon[,`Total Awarded`:=NULL]
+
+
+DT_morning <- melt(DT_morning, id.vars = c('Gender', 'ID'))
+DT_morning <- DT_morning[!is.na(value), list(ID, value, Gender)]
+DT_morning[, attended := 1]
+DT_morning[value=="", attended := 0]
+DT_morning[, date:= dates_morning]
+DT_morning[, value:=NULL]
+DT_morning[, treatment:=0]
+
+
+DT_afternoon <- melt(DT_afternoon, id.vars = c('Gender', 'ID'))
+DT_afternoon <- DT_afternoon[!is.na(value), list(ID, value, Gender)]
+DT_afternoon[, attended := 1]
+DT_afternoon[value=="", attended := 0]
+DT_afternoon[, date:= dates_afternoon]
+DT_afternoon[, value:=NULL]
+DT_afternoon[, treatment:=1]
+
+
+# combining the date dataset
+date_dataset = rbind(DT_morning, DT_afternoon)
+```
+
+### Randomization
+
+***Natural Randomization***
+
+Assigning people to morning and afternoon classes is beyond our control as university students. Therefore, using natural randomization by the university was our best option. In our experiment, the treatment and control groups were assigned by the BU MSBA program faculty.
+
+We had discussions with the BU MSBA faculty to understand the assignment process and make certain that it was indeed random. According to the MSBA faculty, to decide whether a student would be in the morning or afternoon section (control or treatment group), they decided to randomize by blocking on certain characteristics. They randomly assigned students by blocking the GPA and gender characteristics of the students. They decided to block on those characteristics to prevent a disproportionate amount of male or female students and high or low GPA students in one class. Blocking on those characteristics helped our experiment have to have greater statistical power.
+
+### Pre-Experiment Randomization/Balance Check
+
+To ensure that the control and treatment were randomized we performed two randomization checks.
+
+We used the 'prop.test' to check if the proportion of the treatment and control group are split equally. The results 
+showed high p-value and the desired proportion of the treatment group that is 50%, is within the 95 perfect confidence intervals. Therefore, randomization was performed correctly as proportion of units treated is as expected.
+```{r}
+prop.test(data_afternoon[,.N,],(data_afternoon[,.N,]+data_morning[,.N,]),.5)
+```
+Since randomization was blocked on Gender therefore we performed regression of gender on whether they were in the treatment group or not. The pre-experiment characteristic should have insignificant differences between the control and treatment group. Since the p-value is greater than alpha = .05 we can't reject the null hypothesis. So, there is sufficient statistical evidence that there is no difference between the treatment and control groups.
+
+```{r,}
+reg_gender = feols(gender_numerical ~ treatment , data = dataset, se = 'hetero')
+etable(reg_gender)
+```
+
+
+```{r, echo=FALSE}
+treat_vs_control = dataset[,.(count=.N), by=.(Gender, treatment)]
+treat_vs_control[, treatment:=ifelse(treatment==1,"Treatment","Control")]
+
+ggplot(data=treat_vs_control, aes(x=Gender, y=count, fill=Gender)) + 
+  facet_grid(~treatment) + ylab("Student count") +
+  geom_bar(position="dodge", stat="identity") + theme_solarized() +
+  ggtitle("Total Male and Female Count in Tratment and Control") + 
+  theme(plot.title = element_text(hjust = 0.5)) 
+```
+As we can see in the figure above there are equal amounts of Male and Female students in the Treatment and Control Group. Additionally, we see that the number of females in both the treatment and control group is higher.
+
+# Experiment Analysis
+
+## Analysis to calculate Average Treatment Effect
+
+With the given data, we decided to run a set of 4 different regressions to analyze the level of attendance in several different settings and conditions.
+
+1.  Regression of total attendance on the treatment at cluster level without co-variates
+2.  Regression of total attendance on the treatment at individual level without any co-variates
+3.  Regression of total attendance on the treatment at cluster level with co-variates
+4.  Regression of total attendance on the treatment at individual level with co-variates
+
+First of all, we started off with the simplest form, which is a regression of total attendance on the treatment at cluster level without co-variates:
+
+### *Regression 1*
+
+```{r}
+reg_1 <- feols(total_attendance ~  treatment, data=dataset, 
+               cluster = dataset$treatment)
+etable(reg_1)
+```
+The regression result can be interpreted such that, on average, the treatment group attendance was 0.536 higher than the control group. In the context of our experiment, the maximum number of attendances was 9, and the control group's attendance was approximately 8 (7.952). The treatment effect indicates a positive relationship between having an afternoon class and attendance, and the p-value is small enough to reject the null hypothesis, thus the result is statistically significant. In the first regression we performed a cluster at class level, creating two different clusters. This allows us to catch spillovers, and the standard error is less.
+
+### *Regression 2*
+
+```{r}
+reg_2 <- feols(total_attendance ~  treatment, data=dataset, se ='hetero')
+etable(reg_2)
+```
+The second regression analyzes the effect of the treatment on total attendance at individual level without any co-variates. The interpretation of this regression analysis implies that, on average, the attendance of the afternoon class would be 0.536 higher than the control group. In this class we have agreed to use p \<0.05 and the result contains one asterisk (p \< 0.05). Therefore, we are able to to reject the null hypothesis, thus it is statistically significant. Notice that the numerical effects are the same for the first and second regression, compared to the first regression, the SE of this regression is higher as we are looking at individual level.
+
+### *Regression 3*
+
+```{r}
+reg_3 <- feols(total_attendance ~  treatment + Gender, data=dataset, 
+               cluster = dataset$treatment)
+etable(reg_3)
+```
+
+Looking at the regression of total attendance on the treatment at cluster level with co-variates, we added gender as a control variable on top of the first regression. The analysis shows that, on average, the treatment group attendance showed 0.5422 higher than the control group. The p-value was low enough to reject the null hypothesis, thereby making the result statistically significant. The purpose of adding a co-variate is to add a variable that can explain residuals which were not fully explained by the original regression. Looking at the effect size and standard error, the first regression had a positive effect of 0.536 with standard error of 0.2474. The regression with gender co-variate returned a positive effect of 0.5422 and standard error of 0.0056. As a result, adding a gender co-variate should improve our regression result, yet it fails to do so in this particular case.
+
+### *Regression 4*
+
+```{r}
+reg_4 <- feols(total_attendance ~  treatment + Gender, data=dataset, 
+               se ='hetero')
+etable(reg_4)
+```
+The fourth regression added a gender variable as co-variate on top of the second regression. The treatment effect was 0.5422, which is a positive effect between afternoon class and attendance. The p-value was less than 0.05, therefore we are able to reject the null hypothesis and the result is statistically significant. Gender as a co-variate reduced the standard error in this case compared to regression 2 (regression on individual level without any co-variates).
+
+Furthermore, because we are also comparing the difference between cluster and individual level, the standard error for this regression was 0.2442 which was much higher than that of regression at cluster level, 0.0056. This is because the treatment effect would have a greater effect on attendance when looked at individually, while the overall effect would be averaged out when analyzed at class level.
+
+## Analysis on Heterogenity
+
+### *Regression 5*
+
+```{r}
+# Regression of total attendance on the treatment conditional on 'Gender' at 
+# individual level
+reg_5 <- feols(total_attendance ~  treatment * Gender, data=dataset, 
+               se ='hetero')
+etable(reg_5)
+```
+This regression analyzes the effect of treatment on total attendance conditional on 'Gender' at individual level. The summary displays that the treatment group, when 'Gender' is Female, has a positive conditional average treatment effect (CATE) of 0.7857, which is statistically significant. 
+
+The p-value is low enough to reject the null hypothesis with 95% confidence interval. The conditional average treatment effect (CATE) for Males is 0.0714 (0.7857-0.7143) which is not statistically significant. This could be due to the higher number of females than males in the experiment.
+
+## Analysis with fixed effect on Date
+
+### *Regression 6*
+
+```{r}
+# regression on cluster by 'ID'
+reg_cluster_id = feols(attended ~ treatment, data = date_dataset, 
+                           cluster = 'ID')
+etable(reg_cluster_id)
+```
+We ran the regression clustered on student ID because the experiment was randomized at the student level. We found that the average treatment effect is .0595 with standard error .03 and it is statistically significant. So, attending afternoon section led to better attendance than morning by 6%.
+
+### *Regression 7*
+
+```{r}
+# regression on cluster by 'ID' with fixed effect of date
+reg_fixed_date = feols(attended ~ treatment | date, data = date_dataset, 
+                           cluster = 'ID')
+etable(reg_fixed_date)
+```
+We observe each student's attendance every day of the class. So, each day of the class is a repeated observation. Different days could have specific differences amongst them which we cannot measure by co-variates. Therefore, we want to control for it using fixed effects and improve our regression. From this regression result we can conclude that our average treatment effect (ATE) is still .06, with standard error .02, concluding that it didn't improve our previous regression.
+
+### Date Trend Analysis
+
+```{r}
+date_trend_absentee = date_dataset[attended==0,.(total_absentee=.N), 
+                                   by =.(treatment,date)][order(-rank(date))]
+date_trend_absentee[, treatment:= 
+                      ifelse(treatment==0,'Morning','Afternoon')]
+
+ggplot(data=date_trend_absentee,
+  aes(x=date, y=total_absentee, group=treatment, colour=treatment)) + 
+  geom_line() + geom_point() + theme_solarized() +
+  ggtitle("Total Abscence by Treatment & Control and Date") + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(axis.text.x = element_text(angle = 35, vjust = 0.8, hjust=1))
+```
+A general trend we can observe from the graph above is that the afternoon section (treatment) has fewer students absent over the time span of the class. We can see that the number of absentee's in the treatment group (afternoon) is equal for 11/20 and 12/4, it is only higher on 11/4 by one absentee and below the morning section (control group) total absentee count for all other days. For the afternoon class (control group)
+
+Since 11/25 would be the class in the week of Thanksgiving, we were expecting the largest amount of absentees in both the treatment and control but find that in the treatment (afternoon) only one student was absent, whereas for the control (morning section) we find that a total of 7 students were absent.
+
+```{r}
+# Date Trend on Gender
+date_trend_gender = date_dataset[attended==0,.(total_absentee=.N), 
+                                 by=.(Gender,date)][order(-rank(date))]
+
+ggplot(data=date_trend_gender, aes(x=date, y=total_absentee, fill=Gender)) + 
+  geom_bar(position="dodge", stat="identity") + theme_solarized() +
+  ggtitle("Total Abscence by Date & Gender") + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(axis.text.x = element_text(angle = 35, vjust = 0.8, hjust=1))
+```
+We can observe from the graph 'Total Absence by Date & Gender' that on 4 days male students are more absent and 4 days female students are more absent.
+
+## Limitations
+
+Nonetheless, these results must be interpreted with caution and several limitations should be borne in mind.
+
+-   **Sample Size & Profile:** Our sample size is small and only represents a specific MSBA master's program at BU. As it results it has its characteristics and is not representative of the entire college student population. Therefore, we need to conduct this experiment at different levels of education such as Undergraduate (Freshman, Sophomore, Junior, and Senior), Master's and Ph.D. level with different majors and throughout the United States at different universities. Moreover, the results to this experiment could be amplified due to the small sample size.
+-   **More Co-variates:** We had a limitation of one co-variate as we only had gender as our co-variate. With multiple different co-variates, we could have improved our regression and strengthened our randomization checks.
+-   **Timing of Study:** One threat to external validity is the experiment was conducted only from October to December. We could potentially see different results for the summer months when the weather is warmer, and days are longer. Additionally, this particular section only met 9 times, whereas other classes often meet for a period of three to four months. 
+-   **Non-compliance:** We weren't able to capture non-compliance and calculate the complier average causal effect (CACE). There were 4 students \~5% of the sample that didn't comply with the randomized assignment of the afternoon/morning cohort and switched their section.
+-   **Spill-Overs:** We didn't look at other factors that influence attendance such as having a friend in class is likely to influence someone to go to class if the friend is going or not.
+
+# Conclusion & Recommendation
+
+We designed an experiment to analyze the effect of attendance in afternoon sections vs morning sections in the MSBA program. Prior to executing the experiment we hypothesized that adding the co-variate 'Gender' would improve the regression results, yet it did not show any significant effect. Additionally, we hypothesized that controlling for date as a fixed effect would additionally improve the regression results, which we found not to be the case. We found that on both 'cluster' and 'individual' level our results were statistically significant and positive to imply that the afternoon section lead to a higher attendance.The results for this experiment should be interpreted carefully, as various limitations mentioned such as the sample size and profile of the experiment.
+
+In order to increase in-person attendance, we  recommend the MSBA Faculty of Boston University Questrom School of Business to prefer afternoon sections over morning sections when scheduling courses. MSBA faculties could increase the number of afternoon cohorts and limit morning cohorts for future classes. For future implementation, this experiment could also be analyzed on a larger scale when more data is collected across a longer period of time.
+
+# Appendix
+
+## Modelsummary of all regressions
+
+```{r, echo=FALSE}
+# Normal Regressions for both individual and cluster level
+modelsummary(list(reg_1,reg_2,reg_3,reg_4))
+modelsummary(list(reg_5, reg_cluster_id, reg_fixed_date))
+```
